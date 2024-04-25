@@ -1,0 +1,34 @@
+let QueryTime = 30d;
+let Mal_Phish_Mailflow = toscalar (
+EmailEvents
+| extend MDO_detection = parse_json(DetectionMethods)
+| extend FirstDetection = iif(isempty(MDO_detection), "Clean", tostring(bag_keys(MDO_detection)[0]))
+| extend FirstSubcategory = iif(FirstDetection != "Clean" and array_length(MDO_detection[FirstDetection]) > 0, strcat(FirstDetection, ": ", tostring(MDO_detection[FirstDetection][0])), "No Detection (clean)")
+| where FirstSubcategory contains "Malware" or FirstSubcategory contains "Phish"
+| summarize Bademails = count()
+);
+let FP_ZAP = toscalar (
+EmailPostDeliveryEvents | where ActionType == "Redelivery"
+| summarize count()
+);
+let FN_ZAP = toscalar (
+EmailPostDeliveryEvents | where ActionType in ("Malware ZAP","Phish ZAP") and ActionResult == "Success"
+| summarize count()
+);
+let FN_Admin_Submissions = toscalar (
+CloudAppEvents
+| where Timestamp > ago(QueryTime)
+| where ActionType contains "AdminSubmissionSubmitted"
+| extend SubmissionType = tostring((parse_json(RawEventData)).SubmissionType)
+| where SubmissionType in ("1","2")
+| extend Recipients = tostring((parse_json(RawEventData)).Recipients)
+| extend recipients_count = array_length(parse_json(Recipients))
+| summarize TotalRecipients = sum(recipients_count)
+);
+print
+Mal_Phish_Mailflow_Minus_FPs = toreal((Mal_Phish_Mailflow)- toreal(FP_ZAP)),
+ZAPPED_FPs = toreal(FP_ZAP),
+FNs_Submitted = toreal(FN_Admin_Submissions),
+Mal_Phish_Zapped = toreal(FN_ZAP),
+Effectiveness_PostDelivery = (toreal(FN_Admin_Submissions)/(toreal(Mal_Phish_Mailflow)+toreal(FN_ZAP)+toreal(FN_Admin_Submissions)-toreal(FP_ZAP))*100-100),
+Effectiveness_PreDelivery = ((toreal(FN_Admin_Submissions)+toreal(FN_ZAP))/(toreal(Mal_Phish_Mailflow)+toreal(FN_ZAP)+toreal(FN_Admin_Submissions)-toreal(FP_ZAP))*100-100)
